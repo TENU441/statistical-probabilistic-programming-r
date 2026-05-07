@@ -19,6 +19,6 @@ authors:
     family-names: Tammi
     orcid: 'https://orcid.org/0009-0005-5486-9419'
     affiliation: University of Turku
-title: "statistical-probabilistic-programming-r"
+title: "Introduction to Probabilistic Programming in R"
 version: 1.0.0
-url: "https://github.com/carpentries-incubator/statistical-probabilistic-programming-r"
+url: "https://carpentries-incubator.github.io/statistical-probabilistic-programming-r/"
