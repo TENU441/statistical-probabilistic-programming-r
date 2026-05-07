@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - given-names: Ville
+    family-names: Laitinen
+    email: velait@utu.fi
+    affiliation: University or Turku
+    orcid: 'https://orcid.org/0000-0002-2653-1673'
+  - given-names: Leo
+    family-names: Lahti
+    email: leo.lahti@utu.fi
+    affiliation: University of Turku
+    orcid: 'https://orcid.org/0000-0001-5537-637X'
+  - given-names: Aleksi
+    family-names: Lahtinen
+    orcid: 'https://orcid.org/0009-0009-9640-5187'
+    affiliation: University of Turku
+  - given-names: Eetu
+    family-names: Tammi
+    orcid: 'https://orcid.org/0009-0005-5486-9419'
+    affiliation: University of Turku
+title: "statistical-probabilistic-programming-r"
+version: 1.0.0
+url: "https://github.com/carpentries-incubator/statistical-probabilistic-programming-r"
