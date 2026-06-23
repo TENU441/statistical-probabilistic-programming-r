@@ -25,48 +25,57 @@ bayesplot::color_scheme_set("brightblue")
 ```
 
 ::: questions
--   How does Bayesian modeling accommodate survival analysis?
+- What is survival analysis?   
+- How to perform survival analysis with Stan?
 :::
 
 ::: objectives
--   Understand survival analysis basics: hazard, survival function, censoring
+-   Understand survival analysis basics: hazard, survival function, censoring.
 
--   Fit and interpret Weibull (parametric) and Cox (semiparametric) survival models using Stan
+-   Learn to fit Weibull (parametric) and Cox proportional hazards (semiparametric) survival models using Stan.
 
--   Explore more advanced model that has hierarchical structure
+-   Explore a more advanced model with hierarchical structure.
 :::
 
-Survival (time-to-event) data arise when the outcome of interest is the time until an event occurs, for example device failure or death. Unlike ordinary regression, survival data often include censoring, where the exact event time is not fully observed for some units. Analyses must therefore use models that account for both observed event times and censored observations. A simple descriptive summary is the Kaplan–Meier curve, which estimates the survival function $$
-S(t) = P(T > t)
-$$and handles right censoring naturally. We will use Kaplan–Meier estimates for exploratory checks alongside model-based summaries.
+Survival (or time-to-event) data arise when the outcome of interest is the time until some event occurs, such as device failure, disease onset or death. A key difference to ordinary regression settings is that time-to-event data are commonly censored, meaning that for some data points the event has not occurred by the end of the observation period. This implies that the exact event time is unknown and analyses must use techniques that account for both observed event times and censored observations.
 
-Two functions organize survival modeling. The first is the survival function $S(t) = P(T > t)$. The second is the hazard function $h(t)$, risk for an event at time t among those still at risk. Formally, $$h(t) = \lim_{dt \to 0} \dfrac{P(t \le T < t + dt \mid T \ge t)}{dt}.
-$$It is often useful to consider the cumulative hazard $H(t) = \int_0^t h(u)\,du$, which links back to survival through $S(t) = \exp\{-H(t)\}$.
+:::::::::::::::::: callout 
 
-Censoring is part of the data generating process in many applications. Right censoring occurs when we only know that the event time exceeds the observed follow-up. Left censoring occurs when we only know that the event happened before a detection or assessment time. Left truncation, also called delayed entry, occurs when a unit enters the risk set after time zero. Correct handling of the risk set and the likelihood contributions for these cases is essential for valid inference.
+In this episode, we will exclusively analyze right-censored data, meaning data where the event occurs during the follow-up time, or after this period. This is the most common type of censoring but there are two other censoring mechanisms are sometimes encountered. In *left censoring*, the event occurs before observation begins, so the event time is only known to be earlier than a given time point. *Interval censoring* means a situation where the event occurs between two observation times, but the exact timing is unknown. 
 
-There are several modeling strategies for time-to-event outcomes. In a parametric approach such as the Weibull model, we specify a distribution for event times, which yields interpretable parameters and straightforward extrapolation. In a semiparametric approach such as the Cox proportional hazards model, we leave the baseline hazard unspecified and model covariate effects multiplicatively, $h(t \mid x) = h_0(t)\,\exp(x^\top \beta)$. Parametric models can be more efficient when the assumed form is appropriate. Cox models offer robustness when the baseline hazard shape is unknown.
+::::::::::::::::::
 
-This episode adopts a Bayesian perspective consistent with the rest of the course. Censoring enters the likelihood directly. Observed events contribute the density $f(t \mid x)$ and right censored observations contribute the survival $S(t \mid x)$. Priors provide regularization, which can be especially helpful when the number of events is small or when models include many parameters. Posterior draws allow direct uncertainty quantification for quantities of interest such as hazard ratios $\exp(\beta)$, median survival times, survival curves at selected covariate values, and contrasts between treatments or groups.
+Before we start building survival models in Stan, we need to first get familiar with some mathematical concepts important in survival analysis. 
 
-We will use Stan directly from R to implement a few survival models. Specifically, we will code and fit a parametric Weibull model and a Cox proportional hazards model for censored time-to-event data.
+The two functions central to specifying common survival models are the survival function $S(t) = P(T > t)$ and the hazard function $h(t)$. The former gives the probability of surviving beyond time $t$, whereas the latter specifies the instantaneous risk for event at time $t$ among those who have not experienced an event yet. Formally the hazard is defined as $$h(t) = \lim_{dt \to 0} \dfrac{P(t \le T < t + dt \mid T \ge t)}{dt}.
+$$ These two functions are linked through the identity $S(t) = \exp\{-H(t)\},$ where $H(t)$ is the cumulative hazard $H(t) = \int_0^t h(u)\,du$.
+
+While a wealth of various tools for survival analysis  have been presented, including modern machine learning approaches, in this episode, we will focus on two relatively standard models: the parametric Weibull model and the semiparametric Cox proportional hazards model. Both of these model use the multiplicative form $h(t \mid x) = h_0(t)\,\exp(x^\top \beta),$ where  $h_0(t)$ is the baseline hazard describing hazard evolution when covariates equal zero.
+
+A key distinction between the two models is that the Weibull model uses an explicit functional form for the baseline hazard (and simultaneously for the event times), while in the Cox model this is left unspecified. The Weibull models gains statistical strength from this assumed functional form. However, a mismatch between the assumption and data can lead to a poor model fit. The Cox model, on the other hand, can be more robust when the baseline hazard shape is unknown. Both approaches enable assessment of covariate effects of survival times, but only the Weibull model allows explicit survival time predictions.
+
+The way censored events are accounted for in both models is by including the (incomplete) information in them in likelihood directly. In other words, the probability of event time being longer than the censoring threshold, namely $1 - F_T(t^{cens})$, where $F_T(t) = \text{Pr}(T < t)$ is the cumulative distribution function of survival time. Below, we will demonstrate how this is coded in Stan but first we will review our survival data. 
+
+<!-- Present and demo these below -->
+<!-- Posterior draws allow direct uncertainty quantification for quantities of interest such as hazard ratios $\exp(\beta)$, median survival times, survival curves at selected covariate values, and contrasts between treatments or groups. -->
 
 ## Survival data
 
-In this example we fit a Weibull survival model using only microbiome features as predictors. The dataset includes 150 mice and 48 microbial genera, with follow-up recorded as the time to type 1 diabetes onset or censoring. Half of the mice experienced the event (T1D onset) and half were censored.
+Our data are bacterial abundance profiles from stool samples of laboratory grown mice [FIX: add ref]. The data includes measurements from 150 mice and 48 microbial genera, with follow-up recorded as the time to type 1 diabetes onset or censoring at [FIX] days. Approximately half of the mice developed type diabetes during the follow-up. 
 
-All microbial covariates are standardized to have mean 0 and standard deviation 1 before modeling. Consequently, hazard ratios are interpreted per one–standard deviation increase in a covariate, not per one unit in the original measurement scale.
+The data is included in the R package $mia$ which contains tools for microbiome data analysis, and we will load the data from there. 
+
+All continuous microbial abundances (log transformed proportions) are standardized to have mean 0 and standard deviation 1 before modeling. Consequently, hazard ratios are interpreted per one standard deviation increase in abundance. 
 
 ```{r, message=FALSE, warning=FALSE}
 # Packages
-library(dplyr)
+library(tidyverse)
 library(rstan)
-library(posterior)
+library(posterior) # Where needed? [FIX?]
 library(survival)
 library(TreeSummarizedExperiment)
-library(mia)
-library(ggplot2)
 library(survminer)
+library(mia)
 ```
 
 ```{r, warning=FALSE, message=FALSE}
@@ -86,6 +95,7 @@ df$Event      <- colData(tse)$Event
 df$Event_time <- colData(tse)$Event_time
 
 # Pick 10 random microbes as covariates
+# [FIX: pick covariates that produce at least some non-zero effects]
 set.seed(2025)
 feature_cols <- setdiff(names(df), c("Event", "Event_time"))
 selected_microbes <- sample(feature_cols, min(10L, length(feature_cols)))
@@ -116,28 +126,54 @@ standata <- list(
 
 ## Weibull survival model
 
-The Weibull distribution is a versatile parametric model for time-to-event data. The Weibull model is flexible and often a good first choice. Let $T$ be the event time. It is defined by a shape parameter $k>0$ and a scale parameter $\lambda>0$. In survival analysis the survival function is 
+The Weibull model is a versatile parametric choice for time-to-event data that uses the Weibull distribution for the event times $T$. The distribution has two parameters: shape $k>0$ and scale  $\lambda>0$. A common way to include parameters in the model is to set the exponentiated linear term as the scale parameter: 
+
+$$\lambda = \exp(\beta_0 + \beta_1X_1 + \ldots + \beta_KX_K),$$where $X_i$ are the covariate values and $\beta_i$ the corresponding regression coefficients. The scale parameter calibrates the time axis, with larger values implying longer survival. 
+
+The shape parameter, on the other hand, controls how the risk evolves over time: when $0<k<1$ the hazard decreases, with $k=1$ it is constant, and when $k>1$ it increases. This ability to capture decreasing, constant, or increasing hazards with a single parameter, makes the Weibull distribution is a good starting point for event time modeling.
+
+
+The survival and hazard functions can be shown to take the following form [FIX: add reference]: 
+
 $$
-S(t)=\exp\left[-\left(\frac{t}{\lambda}\right)^{k}\right]
+S(t)=\exp\left[-\left(\frac{t}{\lambda}\right)^{k}\right],
 $$ 
-and the hazard is 
+and
 $$ 
 h(t) = \frac{k}{\lambda}\left(\frac{t}{\lambda}\right)^{k-1}. 
 $$
-The shape controls how risk evolves over time: when $0<k<1$ the hazard decreases, when $k=1$ it is constant (the exponential case), and when $k>1$ it increases. The scale $\lambda$ sets the time axis, stretching survival times as it grows. A convenient summary is the median survival time 
+A convenient summary is the median survival time 
 $$ 
 \operatorname{med}(T)=\lambda(\log 2)^{1/k}, 
 $$
-which increases with $\lambda$ and, for fixed $\lambda$, decreases as $k$ increases. Thanks to this ability to capture decreasing, constant, or increasing hazards with a single parameter, the Weibull distribution is a natural starting point for modeling event times.
+which increases linearly with $\lambda$ and, for a fixed $\lambda$, decreases as $k$ increases.
+
+It is easy to show that increasing one covariate $x_j$ by one unit, while holding other covariates constant results in an increase
+
+$$
+\mathrm{HR}_j \;=\; \frac{h\!\left(t \mid x_j + 1\right)}{h\!\left(t \mid x_j\right)} \;=\; \exp\!\left(-k\,\beta_j\right).
+$$
+
+Thus a positive $\beta_j$ yields $\mathrm{HR}_j<1$ (lower hazard; protective) and a negative $\beta_j$ yields $\mathrm{HR}_j>1$ (higher hazard). 
+
+
 
 ### Example
 
-Next, we illustrate the parametric Weibull survival model by estimating hazard ratios and comparing risk groups with Kaplan–Meier curves. Below is the structure of the Stan program.
+Next, we illustrate the Weibull survival model by estimating effects and the corresponding hazard ratios of bacterial genera on diabetes incidence. 
+
+Stan program for the model is below. The data likelihood is coded using the `target +=` notation. This simply means that the term after this notation is added in log likelihood of the model, and is equivalent to the standard `~` notation. [FIX: why use the target notation?] The program is implemented to also accommodate covariate-free regression, thus the zero lower bound for the number of covariates `K`.
+
+<!-- Kaplan-Meier -->
+<!-- A simple descriptive summary is the Kaplan–Meier curve, which estimates the survival function $$ -->
+<!-- S(t) = P(T > t) -->
+<!-- $$and handles right censoring naturally. We will use Kaplan–Meier estimates for exploratory checks alongside model-based summaries. -->
+
 
 ```{stan output.var="weibull_model"}
 // Weibull survival model (shape k, scale λ), simple AFT form
 data {
-  int<lower=1> N;                    // observations
+  int<lower=1> N;                    // number of observations
   int<lower=0> K;                    // number of covariates
   vector<lower=0>[N] time;           // observed times t_i
   int<lower=0,upper=1> event[N];     // 1=event, 0=right-censored
@@ -146,16 +182,15 @@ data {
 
 parameters {
   real<lower=0> k;                   // Weibull shape
-  real beta0;                        // intercept for log λ
-  vector[K] beta;                    // coefficients for log λ
+  real beta0;                        // intercept
+  vector[K] beta;                    // coefficients
 }
 
 transformed parameters {
-  vector[N] log_lambda;              // log λ_i
-  vector<lower=0>[N] lambda;         // λ_i
-  if (K > 0) log_lambda = beta0 + X * beta;
-  else       log_lambda = rep_vector(beta0, N);
-  lambda = exp(log_lambda);
+  vector<lower=0>[N] lambda;
+  
+  if (K > 0) lambda = exp(beta0 + X * beta);
+    else lambda = exp(rep_vector(beta0, N));
 }
 
 model {
@@ -164,45 +199,40 @@ model {
   beta0 ~ normal(0, 1);
   if (K > 0) beta ~ normal(0, 1);
 
-  // likelihood: events use f(t), censoring uses log S(t)
+  // likelihood
+  // [FIX: factorize, without for loop]
   for (i in 1:N) {
-    if (event[i] == 1)
-      target += weibull_lpdf(time[i] | k, lambda[i]);   // log f(t_i)
-    else
+    if (event[i] == 1) // events
+      target += weibull_lpdf(time[i] | k, lambda[i]);
+    else // censored cases
       target += weibull_lccdf(time[i] | k, lambda[i]);  // log S(t_i)
   }
 }
 
 generated quantities {
-  vector[N] t_median;                // median survival: λ_i * (log 2)^(1/k)
+  vector[N] t_median; // median survival time
   for (i in 1:N)
     t_median[i] = lambda[i] * pow(log(2), 1.0 / k);
 }
 
 ```
 
-In our Weibull setup the scale depends on covariates via the AFT link $\log \lambda_i=\beta_0+x_i^\top\beta$ (equivalently, $\lambda_i=\exp(\beta_0+x_i^\top\beta)$), and the hazard is $h_i(t)=\dfrac{k}{\lambda_i}\bigl(\tfrac{t}{\lambda_i}\bigr)^{k-1}$. If we increase a single covariate $x_j$ by one unit (holding the others fixed), the hazard scales by
 
-$$
-\mathrm{HR}_j \;=\; \frac{h\!\left(t \mid x_j + 1\right)}{h\!\left(t \mid x_j\right)} \;=\; \exp\!\left(-k\,\beta_j\right).
-$$
 
-Thus a positive $\beta_j$ yields $\mathrm{HR}_j<1$ (lower hazard; protective) and a negative $\beta_j$ yields $\mathrm{HR}_j>1$ (higher hazard). In the code, we obtain HRs by transforming posterior draws of $k$ and $\beta_j$ with $\exp(-k\,\beta_j)$, and we summarize them by the posterior median and the $95%$ credible interval (2.5%–97.5%).
+Next, we fit the model and obtain the HRs by transforming the posterior draws of $k$ and $\beta_j$ with $\exp(-k\,\beta_j)$, and then use the posterior median and the $95%$ CIs and our summaries. We visualize the results with an ordered forest plot highlighting covariates whose CI excludes 1.
 
-The next chunk transforms posterior draws of $k$ and $\beta_j$ into hazard-ratio draws via $\exp(-k\,\beta_j)$, summarizes each covariate by the posterior median and 95% credible interval, and then produces an ordered forest plot highlighting covariates whose intervals do not include 1. The model is fit with 4 chains and 4000 iterations per chain.
+[FIX: check code]
 
 ```{r, fig.width=10, fig.height=6, dpi=300}
-# Fit the Weibull model
+# Fit
 fit <- rstan::sampling(
   object  = weibull_model,
   data    = standata,
-  chains  = 4, iter = 4000, warmup = 1000,
-  seed    = 2025, refresh = 0,
-  control = list(adapt_delta = 0.95)
+  seed    = 2025, refresh = 0
 )
 
 # Print summary
-print(fit, pars = c("k","beta0","beta"))
+# print(fit, pars = c("k","beta0","beta"))
 
 # Posterior draws
 M <- posterior::as_draws_matrix(fit)
@@ -210,7 +240,7 @@ k_draw <- M[, "k"]
 K <- standata$K
 covar_names <- colnames(standata$X)
 
-# Weibull AFT hazard ratios
+# Hazard ratios
 hr_mat <- do.call(rbind, lapply(seq_len(K), function(j) {
   bj <- M[, paste0("beta[", j, "]")]
   hr_draw <- exp(- k_draw * bj)
@@ -245,9 +275,15 @@ ggplot(hr_df, aes(y = term, x = HR, color = signif)) +
 
 ```
 
-Hazard ratios left of 1 (with 95% intervals not crossing 1) suggest protective associations while those right of 1 indicate increased hazard. In this plot, several taxa fall clearly left of 1, while a few lie right of 1. Estimates whose intervals cross 1 are inconclusive.
+As evident in the the plot, several taxa exclude 1 implying posterior evidence for an association between the genus and diabetes. 
 
-To visualize how the Weibull model separates risk, we form a model-based risk score from the AFT linear predictor $\log\lambda_i=\beta_0+x_i^\top\beta$ using posterior medians of $\beta_0$ and $\beta$. We split subjects at the median of this score (Low vs High) and compare their Kaplan–Meier curves with a log-rank test.
+
+To assess *discrimination*, that is, how well the model is able to correctly rank cases bases on event risk, we form a risk score from the linear predictors $\log\lambda_i=\beta_0+x_i^\top\beta$. We quantify discrimination with Harrell's C-index, which is the ratio of correctly ranked cases and all comparable pairs. Comparability is determined by censoring; two cases cannot be compared if event times for both are censored, or if one case is censored before the other experiences an event. 
+[FIX: compute and compare C posteriors]
+
+We can also visualize discrimination ability by using posterior medians of $\beta_0$ and $\beta$. By splitting subjects at the median score value (Low vs High), we can generate the respective Kaplan–Meier curves:
+
+[FIX: remove p-value; K-M plot with median score split per posterior sample?]
 
 ```{r, fig.width=10, fig.height=6, dpi=300, warning=FALSE}
 # Posterior medians for the AFT linear predictor
@@ -285,30 +321,38 @@ ggsurvplot(
 
 ```
 
-Kaplan–Meier curves by the model-based score (median split) show clear separation: the high AFT score group (larger $\log\lambda$, implying longer times) has higher survival (curve above), while the low-score group declines faster. The log-rank test indicates a statistically significant difference.
+Kaplan–Meier curves by the model-based score (median split) show clear separation: the high AFT score group (larger $\log\lambda$, implying longer times) has higher survival (curve above), while the low-score group declines faster.
 
+<!-- The log-rank test indicates a statistically significant difference. -->
+
+
+<!-- Here -->
 
 
 :::::::::::::::::::::::::::::: challenge
-
-Pick two microbial covariates from the Weibull forest plot:  
-one with HR < 1 and one with HR > 1.
-
-1. Explain in words what each hazard ratio means for time to T1D onset.  
-2. Remember that covariates are standardized: interpret the HRs per one–standard deviation increase.
- 
-
-::::::::::::::::::::::: solution
-
-**HR < 1**  
-A one–standard deviation increase in the microbial covariate is associated with a lower instantaneous risk of T1D onset (protective effect).
-
-**HR > 1**  
-A one–standard deviation increase in the microbial covariate is associated with a higher instantaneous risk of T1D onset (harmful effect).
-
-::::::::::::::::::::::::::::::::
-
+Generate a posterior predictive distribution for the event times. 
 ::::::::::::::::::::::::::::::::::::::::
+
+<!-- :::::::::::::::::::::::::::::: challenge -->
+
+<!-- Pick two microbial covariates from the Weibull forest plot:   -->
+<!-- one with HR < 1 and one with HR > 1. -->
+
+<!-- 1. Explain in words what each hazard ratio means for time to T1D onset.   -->
+<!-- 2. Remember that covariates are standardized: interpret the HRs per one–standard deviation increase. -->
+
+
+<!-- ::::::::::::::::::::::: solution -->
+
+<!-- **HR < 1**   -->
+<!-- A one–standard deviation increase in the microbial covariate is associated with a lower instantaneous risk of T1D onset (protective effect). -->
+
+<!-- **HR > 1**   -->
+<!-- A one–standard deviation increase in the microbial covariate is associated with a higher instantaneous risk of T1D onset (harmful effect). -->
+
+<!-- :::::::::::::::::::::::::::::::: -->
+
+<!-- :::::::::::::::::::::::::::::::::::::::: -->
 
 
 
@@ -328,6 +372,12 @@ S(t \mid x) \;=\; \exp\!\Bigl[-\,H_0(t)\,\exp\!\bigl(x^\top \beta\bigr)\Bigr]
 $$
 
 The coefficients $\beta$ are log–hazard ratios: a one-unit increase in $x_j$ multiplies the hazard by $\exp(\beta_j)$. Estimation is based on the partial likelihood, which compares each event’s linear predictor to those of individuals still at risk at that time and avoids modeling $h_0(t)$. The key assumption is proportional hazards, meaning the hazard ratio for two covariate values is constant over time.
+
+::::::::::::::::::::: callout
+Baseline hazard can be estimated using splines, which enables survival time predictions. 
+
+In brms this can be done as follows: [FIX]
+:::::::::::::::::::::::::::::
 
 ### Example
 

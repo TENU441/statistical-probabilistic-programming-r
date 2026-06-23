@@ -35,6 +35,12 @@ posterior_color <- "#56B4E9"
 
 The data sets used in the lesson can be accessed  [here](https://github.com/carpentries-incubator/statistical-probabilistic-programming-r/tree/main/episodes/data) where you can find them packaged in  `lesson-data.zip`.
 
+
+<!--
+## Contributors
+Ville Laitinen, Eetu Tammi, Aleksi Lahtinen, Leo Lahti
+-->
+
 <!--
 FIXME: place any data you want learners to use in `episodes/data` and then use
        a relative link ( [data zip file](data/lesson-data.zip) ) to provide a
